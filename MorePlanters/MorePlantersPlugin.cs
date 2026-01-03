@@ -1,207 +1,408 @@
-﻿using BepInEx;
-using BepInEx.Configuration;
-using BepInEx.Logging;
-using EquinoxsModUtils;
-using HarmonyLib;
-using MorePlanters.Patches;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Reflection;
+using System.Linq;
+using BepInEx;
+using BepInEx.Configuration;
+using BepInEx.Logging;
+using EquinoxsModUtils;
+using EquinoxsModUtils.Additions;
+using HarmonyLib;
 using UnityEngine;
+
+using TechCategory = Unlock.TechCategory;
+using CoreType = ResearchCoreDefinition.CoreType;
+using ResearchTier = TechTreeState.ResearchTier;
 
 namespace MorePlanters
 {
     [BepInPlugin(MyGUID, PluginName, VersionString)]
+    [BepInDependency("com.equinox.EquinoxsModUtils")]
+    [BepInDependency("com.equinox.EMUAdditions")]
     public class MorePlantersPlugin : BaseUnityPlugin
     {
         private const string MyGUID = "com.equinox.MorePlanters";
         private const string PluginName = "MorePlanters";
-        private const string VersionString = "1.1.0";
+        private const string VersionString = "3.0.0";
 
         private static readonly Harmony Harmony = new Harmony(MyGUID);
-        public static ManualLogSource Log = new ManualLogSource(PluginName);
+        public static ManualLogSource Log;
 
-        // Objects & Variables
-        private static string dataFolder => $"{Application.persistentDataPath}/MorePlanters";
-        
-        public const string planterMk2Name = "Planter MKII";
-        public const string planterMk3Name = "Planter MKIII";
+        public const string PlanterMk2Name = "Planter MKII";
+        public const string PlanterMk3Name = "Planter MKIII";
 
-        public static SchematicsRecipeData planterMk2Recipe;
-        public static SchematicsRecipeData planterMk3Recipe;
-
-        // Assets
-        public static GameObject planterMk2Prefab;
-        public static GameObject planterMk3Prefab;
-
-        // Config Entries
         public static ConfigEntry<bool> doublePlants;
-        public static ConfigEntry<float> slot1XOffset;
-        public static ConfigEntry<float> slot2XOffset;
-        public static ConfigEntry<float> slot3XOffset;
-        public static ConfigEntry<float> slot4XOffset;
-        public static ConfigEntry<float> yOffset;
 
-        private void Awake() {
-            Logger.LogInfo($"PluginName: {PluginName}, VersionString: {VersionString} is loading...");
+        private static string dataFolder => Application.persistentDataPath + "/MorePlanters";
+
+        // Track MKIII planter output settings
+        public static Dictionary<uint, PlanterMk3Settings> planterSettings = new Dictionary<uint, PlanterMk3Settings>();
+
+        private void Awake()
+        {
+            Log = Logger;
+            Log.LogInfo($"PluginName: {PluginName}, VersionString: {VersionString} is loading...");
+
             Harmony.PatchAll();
-
             CreateConfigEntries();
             ApplyPatches();
-            LoadPrefabs();
 
-            PlanterMk3GUI.buttonUncheckedTexture = ModUtils.LoadTexture2DFromFile("MorePlanters.Assets.Images.CheckboxUnTicked.png");
-            PlanterMk3GUI.buttonCheckedTexture = ModUtils.LoadTexture2DFromFile("MorePlanters.Assets.Images.CheckboxTicked.png");
-
-            ModUtils.AddNewUnlock(new NewUnlockDetails() {
-                category = Unlock.TechCategory.Synthesis,
-                coreTypeNeeded = ResearchCoreDefinition.CoreType.Green,
+            // Add Planter MKII unlock
+            EMUAdditions.AddNewUnlock(new NewUnlockDetails
+            {
+                category = TechCategory.Synthesis,
+                coreTypeNeeded = CoreType.Blue,
                 coreCountNeeded = 100,
-                description = "Produces two plants per seed at 2x speed",
-                displayName = planterMk2Name,
-                numScansNeeded = 0,
-                requiredTier = TechTreeState.ResearchTier.Tier0,
-                treePosition = 0,
-                sprite = ModUtils.LoadSpriteFromFile("MorePlanters.Assets.Images.Planter Mk2.png")
+                description = "Produces plants at 2x speed. Can produce two plants per seed.",
+                displayName = PlanterMk2Name,
+                requiredTier = ResearchTier.Tier1,
+                treePosition = 0
             });
-            ModUtils.AddNewUnlock(new NewUnlockDetails() {
-                category = Unlock.TechCategory.Synthesis,
-                coreTypeNeeded = ResearchCoreDefinition.CoreType.Green,
+
+            // Add Planter MKIII unlock
+            EMUAdditions.AddNewUnlock(new NewUnlockDetails
+            {
+                category = TechCategory.Synthesis,
+                coreTypeNeeded = CoreType.Blue,
                 coreCountNeeded = 250,
-                description = "Houses an integrated Thresher and has the capability to self-seed",
-                displayName = planterMk3Name,
-                numScansNeeded = 0,
-                requiredTier = TechTreeState.ResearchTier.Tier0,
-                treePosition = 0,
-                sprite = ModUtils.LoadSpriteFromFile("MorePlanters.Assets.Images.Planter Mk3.png")
+                description = "Produces plants at 2x speed with integrated Thresher. Outputs processed materials directly.",
+                displayName = PlanterMk3Name,
+                requiredTier = ResearchTier.Tier1,
+                treePosition = 0
             });
 
-            ModUtils.GameDefinesLoaded += OnGameDefinesLoaded;
-            ModUtils.SaveStateLoaded += OnSaveStateLoaded;
-            ModUtils.TechTreeStateLoaded += OnTechTreeLoaded;
+            // Add Planter MKII machine (uses existing Planter prefab)
+            // Note: Don't set headerTitle/subHeaderTitle - inherit from parent
+            PlanterDefinition mk2Def = ScriptableObject.CreateInstance<PlanterDefinition>();
+            EMUAdditions.AddNewMachine<PlanterInstance, PlanterDefinition>(mk2Def, new NewResourceDetails
+            {
+                name = PlanterMk2Name,
+                description = "Produces plants at 2x speed. Can produce two plants per seed.",
+                craftingMethod = CraftingMethod.Assembler,
+                craftTierRequired = 0,
+                maxStackCount = 50,
+                sortPriority = 100,
+                unlockName = PlanterMk2Name,
+                parentName = "Planter"
+            });
 
-            Logger.LogInfo($"PluginName: {PluginName}, VersionString: {VersionString} is loaded.");
-            Log = Logger;
+            // Add Planter MKIII machine
+            PlanterDefinition mk3Def = ScriptableObject.CreateInstance<PlanterDefinition>();
+            EMUAdditions.AddNewMachine<PlanterInstance, PlanterDefinition>(mk3Def, new NewResourceDetails
+            {
+                name = PlanterMk3Name,
+                description = "Produces plants at 2x speed with integrated Thresher. Outputs processed materials directly.",
+                craftingMethod = CraftingMethod.Assembler,
+                craftTierRequired = 0,
+                maxStackCount = 50,
+                sortPriority = 101,
+                unlockName = PlanterMk3Name,
+                parentName = "Planter"
+            });
+
+            // Add recipes
+            EMUAdditions.AddNewRecipe(new NewRecipeDetails
+            {
+                GUID = MyGUID,
+                craftingMethod = CraftingMethod.Assembler,
+                craftTierRequired = 0,
+                duration = 5f,
+                unlockName = PlanterMk2Name,
+                ingredients = new List<RecipeResourceInfo>
+                {
+                    new RecipeResourceInfo("Planter", 1),
+                    new RecipeResourceInfo("Mechanical Components", 5),
+                    new RecipeResourceInfo("Copper Wire", 10)
+                },
+                outputs = new List<RecipeResourceInfo>
+                {
+                    new RecipeResourceInfo(PlanterMk2Name, 1)
+                },
+                sortPriority = 100
+            });
+
+            EMUAdditions.AddNewRecipe(new NewRecipeDetails
+            {
+                GUID = MyGUID,
+                craftingMethod = CraftingMethod.Assembler,
+                craftTierRequired = 0,
+                duration = 10f,
+                unlockName = PlanterMk3Name,
+                ingredients = new List<RecipeResourceInfo>
+                {
+                    new RecipeResourceInfo(PlanterMk2Name, 1),
+                    new RecipeResourceInfo("Thresher", 1),
+                    new RecipeResourceInfo("Processor Unit", 2)
+                },
+                outputs = new List<RecipeResourceInfo>
+                {
+                    new RecipeResourceInfo(PlanterMk3Name, 1)
+                },
+                sortPriority = 101
+            });
+
+            // Hook events - Note: EMUAdditions handles unlock linking via unlockName
+            EMU.Events.SaveStateLoaded += OnSaveStateLoaded;
+            EMU.Events.TechTreeStateLoaded += OnTechTreeLoaded;
+
+            Log.LogInfo($"PluginName: {PluginName}, VersionString: {VersionString} is loaded.");
         }
 
-        private void OnGUI() {
-            if (PlanterMk3GUI.shouldShowGUI) {
-                PlanterMk3GUI.DrawGUI();
-            }
+        private void CreateConfigEntries()
+        {
+            doublePlants = Config.Bind("General", "Double Plants", true,
+                new ConfigDescription("Whether the Planter MKII should produce two plants per seed."));
         }
 
-        // Events
-        
-        private void OnGameDefinesLoaded(object sender, EventArgs e) {
-            ResourceInfo planterMk2 = ModUtils.GetResourceInfoByName(planterMk2Name);
-            planterMk2.unlock = ModUtils.GetUnlockByName(planterMk2Name);
-
-            ResourceInfo planterMk3 = ModUtils.GetResourceInfoByName(planterMk3Name);
-            planterMk3.unlock = ModUtils.GetUnlockByName(planterMk3Name);
+        private void ApplyPatches()
+        {
+            Harmony.CreateAndPatchAll(typeof(PlanterInstancePatch));
         }
 
-        private void OnSaveStateLoaded(object sender, EventArgs e) {
+        private void OnSaveStateLoaded(object sender, EventArgs e)
+        {
             LoadData(SaveState.instance.metadata.worldName);
         }
 
-        private void OnTechTreeLoaded(object sender, EventArgs e) {
-            Unlock atlantumIngot = ModUtils.GetUnlockByName(UnlockNames.AtlantumIngot);
-            Unlock thresherMk2 = ModUtils.GetUnlockByName(UnlockNames.ThresherMKII);
-            Unlock assemblerMk2 = ModUtils.GetUnlockByName(UnlockNames.AssemblerMKII);
+        private void OnTechTreeLoaded()
+        {
+            // Position unlocks in tech tree
+            Unlock atlantum = EMU.Unlocks.GetUnlockByName("Atlantum Ingot");
+            Unlock thresherMk2 = EMU.Unlocks.GetUnlockByName("Thresher MKII");
+            Unlock assemblerMk2 = EMU.Unlocks.GetUnlockByName("Assembler MKII");
 
-            Unlock planterMk2 = ModUtils.GetUnlockByName(planterMk2Name);
-            planterMk2.requiredTier = atlantumIngot.requiredTier;
-            planterMk2.treePosition = assemblerMk2.treePosition;
-            planterMk2.unlockedRecipes.Add(planterMk2Recipe);
-
-            Unlock planterMk3 = ModUtils.GetUnlockByName(planterMk3Name);
-            planterMk3.requiredTier = thresherMk2.requiredTier;
-            planterMk3.treePosition = assemblerMk2.treePosition;
-            planterMk3.unlockedRecipes.Add(planterMk3Recipe);
-
-            Unlock planter = ModUtils.GetUnlockByName(UnlockNames.Planter);
-            planter.unlockedRecipes.Remove(planterMk2Recipe);
-            planter.unlockedRecipes.Remove(planterMk3Recipe);
-        }
-
-        // Public Functions
-
-        public static void SaveData(string worldName) {
-            Directory.CreateDirectory(dataFolder);
-
-            string saveFile = $"{dataFolder}/{worldName}.txt";
-            List<string> lines = new List<string>();
-            foreach (PlanterExtension extension in PlanterMk3GUI.planterExtensions.Values) {
-                lines.Add(extension.Serialise());
+            Unlock mk2Unlock = EMU.Unlocks.GetUnlockByName(PlanterMk2Name);
+            if (mk2Unlock != null && atlantum != null && assemblerMk2 != null)
+            {
+                mk2Unlock.requiredTier = atlantum.requiredTier;
+                mk2Unlock.treePosition = assemblerMk2.treePosition;
             }
 
-            File.WriteAllLines(saveFile, lines);
+            Unlock mk3Unlock = EMU.Unlocks.GetUnlockByName(PlanterMk3Name);
+            if (mk3Unlock != null && thresherMk2 != null && assemblerMk2 != null)
+            {
+                mk3Unlock.requiredTier = thresherMk2.requiredTier;
+                mk3Unlock.treePosition = assemblerMk2.treePosition;
+            }
         }
 
-        public static void LoadData(string worldName) {
-            string saveFile = $"{dataFolder}/{worldName}.txt";
-            if (!File.Exists(saveFile)) {
-                Log.LogWarning($"Save file not found for world '{worldName}'");
+        public static void SaveData(string worldName)
+        {
+            Directory.CreateDirectory(dataFolder);
+            string path = dataFolder + "/" + worldName + ".txt";
+            List<string> lines = new List<string>();
+            foreach (var kvp in planterSettings)
+            {
+                lines.Add(kvp.Value.Serialize());
+            }
+            File.WriteAllLines(path, lines);
+        }
+
+        public static void LoadData(string worldName)
+        {
+            string path = dataFolder + "/" + worldName + ".txt";
+            if (!File.Exists(path))
+            {
+                Log.LogInfo($"No save file found for world '{worldName}'");
                 return;
             }
 
-            string[] lines = File.ReadAllLines(saveFile);
-            foreach(string line in lines) {
-                PlanterExtension extension = PlanterExtension.Deserialise(line);
-                PlanterMk3GUI.planterExtensions.Add(extension.instanceId, extension);
+            planterSettings.Clear();
+            string[] lines = File.ReadAllLines(path);
+            foreach (string line in lines)
+            {
+                PlanterMk3Settings settings = PlanterMk3Settings.Deserialize(line);
+                planterSettings[settings.instanceId] = settings;
             }
         }
 
-        // Private Functions
-
-        private void CreateConfigEntries() {
-            doublePlants = Config.Bind("General", "Double Plants", true, new ConfigDescription($"Whether the {planterMk2Name} should produce two plants per seed. Disable if not using a mod to void excess"));
-            slot1XOffset = Config.Bind("General", "Slot 1 X Offset", -295f, new ConfigDescription("Controls the horizontal offset of the filter GUI for the first plant slot", new AcceptableValueRange<float>(-5000, 5000)));
-            slot2XOffset = Config.Bind("General", "Slot 2 X Offset", -145f, new ConfigDescription("Controls the horizontal offset of the filter GUI for the second plant slot", new AcceptableValueRange<float>(-5000, 5000)));
-            slot3XOffset = Config.Bind("General", "Slot 3 X Offset", 10f, new ConfigDescription("Controls the horizontal offset of the filter GUI for the third plant slot", new AcceptableValueRange<float>(-5000, 5000)));
-            slot4XOffset = Config.Bind("General", "Slot 4 X Offset", 160f, new ConfigDescription("Controls the horizontal offset of the filter GUI for the fourth plant slot", new AcceptableValueRange<float>(-5000, 5000)));
-            yOffset = Config.Bind("General", "GUI Y Offset", -300f, new ConfigDescription("Controls the vertical offset of the filter GUI", new AcceptableValueRange<float>(-5000, 5000)));
+        public static bool IsPlanterMk2(PlanterInstance planter)
+        {
+            return planter.myDef != null && planter.myDef.displayName == PlanterMk2Name;
         }
 
-        private void ApplyPatches() {
-            Harmony.CreateAndPatchAll(typeof(GameDefinesPatch));
-            Harmony.CreateAndPatchAll(typeof(PlanterDefinitionPatch));
-            Harmony.CreateAndPatchAll(typeof(PlanterInstancePatch));
-            Harmony.CreateAndPatchAll(typeof(PlanterUIPatch));
-            Harmony.CreateAndPatchAll(typeof(SaveStatePatch));
+        public static bool IsPlanterMk3(PlanterInstance planter)
+        {
+            return planter.myDef != null && planter.myDef.displayName == PlanterMk3Name;
         }
 
-        private void LoadPrefabs() {
-            AssetBundle bundle = LoadAssetBundle("caspuinox");
-
-            planterMk2Prefab = bundle.LoadAsset<GameObject>("assets/gpui_plantermk2.prefab");
-            planterMk3Prefab = bundle.LoadAsset<GameObject>("assets/gpui_plantermk3.prefab");
-
-            planterMk3Prefab.transform.Find("r_spin")?.gameObject.AddComponent<IndependentRotation>();
-            planterMk3Prefab.transform.Find("f_spin")?.gameObject.AddComponent<IndependentRotation>();
-        }
-
-        private static AssetBundle LoadAssetBundle(string filename) {
-            Assembly assembly = Assembly.GetCallingAssembly();
-            AssetBundle assetBundle = AssetBundle.LoadFromStream(assembly.GetManifestResourceStream($"MorePlanters.Assets.{filename}"));
-            return assetBundle;
+        public static bool IsUpgradedPlanter(PlanterInstance planter)
+        {
+            return IsPlanterMk2(planter) || IsPlanterMk3(planter);
         }
     }
 
-    public class IndependentRotation : MonoBehaviour
+    public class PlanterMk3Settings
     {
-        public Vector3 rotationAxis = Vector3.left;
-        public float rotationSpeed = 90.0f;
+        public uint instanceId;
+        public int[] slotOutputMode = new int[4]; // 0=stems/buds, 1=extract, 2=plantmatter
 
-        public void SetRotationSettings(Vector3 axis, float speed) {
-            rotationAxis = axis;
-            rotationSpeed = speed;
+        public PlanterMk3Settings(uint id)
+        {
+            instanceId = id;
         }
 
-        void Update() {
-            // Rotate around the specified local axis at the specified speed
-            transform.Rotate(rotationAxis * rotationSpeed * Time.deltaTime, Space.Self);
+        public string Serialize()
+        {
+            return $"{instanceId}|{slotOutputMode[0]}|{slotOutputMode[1]}|{slotOutputMode[2]}|{slotOutputMode[3]}";
+        }
+
+        public static PlanterMk3Settings Deserialize(string input)
+        {
+            string[] parts = input.Split('|');
+            var settings = new PlanterMk3Settings(uint.Parse(parts[0]));
+            for (int i = 0; i < 4 && i + 1 < parts.Length; i++)
+            {
+                settings.slotOutputMode[i] = int.Parse(parts[i + 1]);
+            }
+            return settings;
+        }
+    }
+
+    internal class PlanterInstancePatch
+    {
+        // Track which slots were growing before SimUpdate (to detect when they become harvestable)
+        private static Dictionary<uint, bool[]> wasGrowing = new Dictionary<uint, bool[]>();
+
+        // Speed boost and output handling for MKII and MKIII planters
+        [HarmonyPatch(typeof(PlanterInstance), "SimUpdate")]
+        [HarmonyPrefix]
+        private static void SimUpdatePrefix(ref PlanterInstance __instance)
+        {
+            if (!MorePlantersPlugin.IsUpgradedPlanter(__instance))
+                return;
+
+            uint instanceId = __instance.commonInfo.instanceId;
+
+            // Track which slots are currently growing (before update)
+            if (!wasGrowing.ContainsKey(instanceId))
+                wasGrowing[instanceId] = new bool[4];
+
+            for (int i = 0; i < __instance.plantSlots.Length && i < 4; i++)
+            {
+                wasGrowing[instanceId][i] = __instance.plantSlots[i].state == PlanterInstance.PlantState.Growing;
+            }
+
+            // Apply 2x speed by halving growth duration
+            for (int i = 0; i < __instance.plantSlots.Length; i++)
+            {
+                ref var slot = ref __instance.plantSlots[i];
+                if (slot.plantId == -1) continue;
+
+                // Default growth is 120 seconds, we want 60 for 2x speed
+                if (slot.totalGrowthDuration == 120f)
+                {
+                    slot.totalGrowthDuration = 60f;
+                }
+            }
+        }
+
+        [HarmonyPatch(typeof(PlanterInstance), "SimUpdate")]
+        [HarmonyPostfix]
+        private static void SimUpdatePostfix(ref PlanterInstance __instance)
+        {
+            if (!MorePlantersPlugin.IsUpgradedPlanter(__instance))
+                return;
+
+            uint instanceId = __instance.commonInfo.instanceId;
+            if (!wasGrowing.ContainsKey(instanceId))
+                return;
+
+            // Check if any slot just became harvestable
+            for (int i = 0; i < __instance.plantSlots.Length && i < 4; i++)
+            {
+                ref var slot = ref __instance.plantSlots[i];
+                bool justHarvested = wasGrowing[instanceId][i] &&
+                    slot.state == PlanterInstance.PlantState.Harvestable;
+
+                if (!justHarvested)
+                    continue;
+
+                // MKII: Double output
+                if (MorePlantersPlugin.IsPlanterMk2(__instance) && MorePlantersPlugin.doublePlants.Value)
+                {
+                    if (slot.plantId != -1)
+                    {
+                        ref var outputInv = ref __instance.GetOutputInventory();
+                        outputInv.AddResources(slot.plantId, 1, true);
+                    }
+                }
+
+                // MKIII: Convert to processed materials
+                if (MorePlantersPlugin.IsPlanterMk3(__instance))
+                {
+                    ref var outputInv = ref __instance.GetOutputInventory();
+
+                    // Find the raw plant in the output and convert it
+                    for (int j = 0; j < outputInv.myStacks.Length; j++)
+                    {
+                        ref var stack = ref outputInv.myStacks[j];
+                        if (stack.isEmpty || stack.info == null) continue;
+
+                        string resourceName = stack.info.displayName;
+                        string processedName = GetProcessedName(resourceName);
+
+                        if (processedName != null)
+                        {
+                            ResourceInfo processed = EMU.Resources.GetResourceInfoByName(processedName);
+                            if (processed != null)
+                            {
+                                int count = stack.count;
+                                outputInv.TryRemoveResources(stack.info.uniqueId, count);
+                                outputInv.AddResources(processed.uniqueId, count, true);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        private static string GetProcessedName(string rawPlantName)
+        {
+            switch (rawPlantName)
+            {
+                case "Kindlevine": return "Kindlevine Stems";
+                case "Shiverthorn": return "Shiverthorn Buds";
+                case "Plantmatter": return "Plantmatter Fiber";
+                default: return null;
+            }
+        }
+
+        // TakeAll postfix for double output when player/inserter takes from MKII
+        [HarmonyPatch(typeof(PlanterInstance), "TakeAll")]
+        [HarmonyPostfix]
+        private static void TakeAllPostfix(ref PlanterInstance __instance, bool actuallyTake, ref List<ResourceStack> __result)
+        {
+            if (!actuallyTake)
+                return;
+
+            if (!MorePlantersPlugin.IsPlanterMk2(__instance))
+                return;
+
+            if (!MorePlantersPlugin.doublePlants.Value)
+                return;
+
+            // Double the result list (already taken, so just double what was returned)
+            var doubled = new List<ResourceStack>();
+            foreach (var stack in __result)
+            {
+                doubled.Add(stack);
+                doubled.Add(ResourceStack.CreateSimpleStack(stack.info.uniqueId, stack.count));
+            }
+            __result.Clear();
+            __result.AddRange(doubled);
+        }
+    }
+
+    // Save data when game saves
+    [HarmonyPatch(typeof(SaveState), "SaveToFile")]
+    internal class SaveStatePatch
+    {
+        [HarmonyPostfix]
+        private static void SavePlanterData()
+        {
+            MorePlantersPlugin.SaveData(SaveState.instance.metadata.worldName);
+            MorePlantersPlugin.Log.LogInfo("MorePlanters data saved");
         }
     }
 }
