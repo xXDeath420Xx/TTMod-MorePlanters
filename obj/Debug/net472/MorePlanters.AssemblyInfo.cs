@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("MorePlanters")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+77a51e45d8ee05fdb0f8b1836b7dc431d38b8ef0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+e857443e7493c9102d8870393178b846cca22c9e")]
 [assembly: System.Reflection.AssemblyProductAttribute("MorePlanters")]
 [assembly: System.Reflection.AssemblyTitleAttribute("MorePlanters")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
